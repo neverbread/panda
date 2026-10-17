@@ -57,6 +57,11 @@ uint16_t current_safety_param = 0;
 const safety_hooks *current_hooks = &nooutput_hooks;
 const addr_checks *current_rx_checks = &default_rx_checks;
 
+bool safety_uses_obd_can2(void) {
+  return ((current_safety_mode == SAFETY_ELM327) && (current_safety_param == 0U)) ||
+         ((current_safety_mode == SAFETY_HYUNDAI_LEGACY) && hyundai_engine_temperatures);
+}
+
 int safety_rx_hook(CANPacket_t *to_push) {
   bool controls_allowed_prev = controls_allowed;
   int ret = current_hooks->rx(to_push);

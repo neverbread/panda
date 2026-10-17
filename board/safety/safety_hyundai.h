@@ -240,6 +240,20 @@ static int hyundai_tx_hook(CANPacket_t *to_send) {
     tx = msg_allowed(to_send, HYUNDAI_TX_MSGS, sizeof(HYUNDAI_TX_MSGS)/sizeof(HYUNDAI_TX_MSGS[0]));
   }
 
+  // Optional display telemetry on the separate OBD bus. Permit only these exact
+  // padded read requests and the ECM/TCM ISO-TP flow control (10 ms STmin).
+  if (hyundai_legacy && hyundai_engine_temperatures && (GET_BUS(to_send) == 1) &&
+      (GET_LEN(to_send) == 8) && (to_send->extended == 0U)) {
+    const uint32_t request = GET_BYTES(to_send, 0, 4);
+    const bool oil_request = (addr == 0x7E0) && (request == 0x01E02203U);
+    const bool dct_request = (addr == 0x7E1) && (request == 0xA4012203U);
+    const bool temperature_flow_control = ((addr == 0x7E0) || (addr == 0x7E1)) && (request == 0x000A0030U);
+    const bool coolant_request = (addr == 0x7DF) && (request == 0x00050102U);
+    if ((oil_request || dct_request || temperature_flow_control || coolant_request) && (GET_BYTES(to_send, 4, 4) == 0U)) {
+      tx = 1;
+    }
+  }
+
   // FCA11: Block any potential actuation
   if ((addr == 0x38D) && !hyundai_escc) {
     int CR_VSM_DecCmd = GET_BYTE(to_send, 1);
@@ -342,6 +356,7 @@ static const addr_checks* hyundai_init(uint16_t param) {
 static const addr_checks* hyundai_legacy_init(uint16_t param) {
   hyundai_common_init(param);
   hyundai_legacy = true;
+  hyundai_engine_temperatures = GET_FLAG(param, HYUNDAI_PARAM_ENGINE_TEMPERATURES);
   hyundai_longitudinal = false;
   hyundai_camera_scc = false;
 

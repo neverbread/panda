@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import unittest
-from panda import Panda
+from panda import Panda, DLC_TO_LEN
 from panda.tests.libpanda import libpanda_py
 import panda.tests.safety.common as common
 from panda.tests.safety.common import CANPackerPanda
@@ -140,6 +140,89 @@ class TestHyundaiLegacySafety(TestHyundaiSafety):
     self.safety = libpanda_py.libpanda
     self.safety.set_safety_hooks(Panda.SAFETY_HYUNDAI_LEGACY, 0)
     self.safety.init_tests()
+
+
+class TestHyundaiLegacyEngineTemperaturesSafety(TestHyundaiLegacySafety):
+  TX_MSGS = TestHyundaiLegacySafety.TX_MSGS + [[0x7E0, 1], [0x7DF, 1], [0x7E1, 1]]
+  TEMPERATURE_MSGS = (
+    (0x7E0, bytes.fromhex("03 22 E0 01 00 00 00 00")),
+    (0x7DF, bytes.fromhex("02 01 05 00 00 00 00 00")),
+    (0x7E0, bytes.fromhex("30 00 0A 00 00 00 00 00")),
+    (0x7E1, bytes.fromhex("03 22 01 A4 00 00 00 00")),
+    (0x7E1, bytes.fromhex("30 00 0A 00 00 00 00 00")),
+  )
+
+  def setUp(self):
+    super().setUp()
+    self.safety.set_safety_hooks(Panda.SAFETY_HYUNDAI_LEGACY, Panda.FLAG_HYUNDAI_ENGINE_TEMPERATURES)
+    self.safety.init_tests()
+
+  def test_temperature_queries_with_controls_on_and_off(self):
+    for controls_allowed in (False, True):
+      self.safety.set_controls_allowed(controls_allowed)
+      for addr, dat in self.TEMPERATURE_MSGS:
+        self.assertEqual(self._tx(libpanda_py.make_CANPacket(addr, 1, dat)), 1)
+        self.assertEqual(self.safety.get_controls_allowed(), controls_allowed)
+      for addr, dat in ((0x7E8, "10 33 62 E0 01 00 00 00"), (0x7E9, "10 31 62 01 A4 00 00 00")):
+        self._rx(libpanda_py.make_CANPacket(addr, 1, bytes.fromhex(dat)))
+        self.assertEqual(self.safety.get_controls_allowed(), controls_allowed)
+
+  def test_temperature_query_payloads_exact(self):
+    # Mutate every byte, including all ISO-TP fields and padding. Only the five
+    # complete messages are permitted, not arbitrary reads or diagnostic writes.
+    for addr, dat in self.TEMPERATURE_MSGS:
+      for index in range(8):
+        for value in range(256):
+          if value == dat[index]:
+            continue
+          changed = bytearray(dat)
+          changed[index] = value
+          self.assertEqual(self._tx(libpanda_py.make_CANPacket(addr, 1, changed)), 0,
+                           (hex(addr), index, changed.hex()))
+
+  def test_temperature_query_bus_and_length(self):
+    for addr, dat in self.TEMPERATURE_MSGS:
+      for bus in range(8):
+        for length in DLC_TO_LEN:
+          msg = libpanda_py.make_CANPacket(addr, bus, dat[:length].ljust(length, b"\x00"))
+          self.assertEqual(self._tx(msg), int(bus == 1 and length == 8), (bus, length))
+      msg = libpanda_py.make_CANPacket(addr, 1, dat)
+      msg[0].extended = 1
+      self.assertEqual(self._tx(msg), 0)
+
+  def test_temperature_query_addresses(self):
+    for _, dat in self.TEMPERATURE_MSGS:
+      for addr in list(range(0x700, 0x800)) + [0x18DB33F1, 0x18DA10F1]:
+        self.assertEqual(self._tx(libpanda_py.make_CANPacket(addr, 1, dat)), int((addr, dat) in self.TEMPERATURE_MSGS), hex(addr))
+
+  def test_temperature_queries_only_with_legacy_flag(self):
+    for mode in (Panda.SAFETY_HYUNDAI_LEGACY, Panda.SAFETY_HYUNDAI, Panda.SAFETY_HYUNDAI_CANFD,
+                 Panda.SAFETY_SILENT, Panda.SAFETY_NOOUTPUT):
+      for flags in (0, Panda.FLAG_HYUNDAI_ENGINE_TEMPERATURES):
+        self.assertEqual(self.safety.set_safety_hooks(mode, flags), 0)
+        self.safety.init_tests()
+        for addr, dat in self.TEMPERATURE_MSGS:
+          expected = mode == Panda.SAFETY_HYUNDAI_LEGACY and flags == Panda.FLAG_HYUNDAI_ENGINE_TEMPERATURES
+          self.assertEqual(self._tx(libpanda_py.make_CANPacket(addr, 1, dat)), int(expected), (mode, flags))
+
+  def test_temperature_queries_blocked_on_relay_fault(self):
+    self.safety.set_relay_malfunction(True)
+    for addr, dat in self.TEMPERATURE_MSGS:
+      self.assertEqual(self._tx(libpanda_py.make_CANPacket(addr, 1, dat)), -1)
+
+  def test_obd_routing_follows_active_safety_configuration(self):
+    # Exercise transitions to every supported mode, including clearing the flag.
+    # ELM327's existing routing behavior remains unchanged.
+    modes = {getattr(Panda, name) for name in dir(Panda) if name.startswith("SAFETY_")}
+    for mode in modes:
+      for flags in (0, 1, Panda.FLAG_HYUNDAI_ENGINE_TEMPERATURES, 0xFFFF):
+        if self.safety.set_safety_hooks(mode, flags) != 0:
+          continue
+        expected = (mode == Panda.SAFETY_ELM327 and flags == 0) or \
+                   (mode == Panda.SAFETY_HYUNDAI_LEGACY and bool(flags & Panda.FLAG_HYUNDAI_ENGINE_TEMPERATURES))
+        self.assertEqual(self.safety.safety_uses_obd_can2(), expected, (mode, flags))
+    self.safety.set_safety_hooks(Panda.SAFETY_SILENT, 0)
+    self.assertFalse(self.safety.safety_uses_obd_can2())
 
 
 class TestHyundaiLegacySafetyEV(TestHyundaiSafety):

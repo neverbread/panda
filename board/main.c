@@ -83,40 +83,28 @@ void set_safety_mode(uint16_t mode, uint16_t param) {
   switch (mode_copy) {
     case SAFETY_SILENT:
       set_intercept_relay(false, false);
-      if (current_board->has_obd) {
-        current_board->set_can_mode(CAN_MODE_NORMAL);
-      }
       can_silent = ALL_CAN_SILENT;
       break;
     case SAFETY_NOOUTPUT:
       set_intercept_relay(false, false);
-      if (current_board->has_obd) {
-        current_board->set_can_mode(CAN_MODE_NORMAL);
-      }
       can_silent = ALL_CAN_LIVE;
       break;
     case SAFETY_ELM327:
       set_intercept_relay(false, false);
       heartbeat_counter = 0U;
       heartbeat_lost = false;
-      if (current_board->has_obd) {
-        if (param == 0U) {
-          current_board->set_can_mode(CAN_MODE_OBD_CAN2);
-        } else {
-          current_board->set_can_mode(CAN_MODE_NORMAL);
-        }
-      }
       can_silent = ALL_CAN_LIVE;
       break;
     default:
       set_intercept_relay(true, false);
       heartbeat_counter = 0U;
       heartbeat_lost = false;
-      if (current_board->has_obd) {
-        current_board->set_can_mode(CAN_MODE_NORMAL);
-      }
       can_silent = ALL_CAN_LIVE;
       break;
+  }
+  if (current_board->has_obd) {
+    // Use the successfully installed safety configuration, including fallback.
+    current_board->set_can_mode(safety_uses_obd_can2() ? CAN_MODE_OBD_CAN2 : CAN_MODE_NORMAL);
   }
   can_init_all();
 }
